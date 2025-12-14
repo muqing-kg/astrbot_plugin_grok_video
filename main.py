@@ -565,48 +565,48 @@ class GrokVideoPlugin(Star):
                 await event.send(event.plain_result(f"❌ {error_msg}"))
                 return
             
-        if video_url or video_path:
-            try:
-                video_component = await self._create_video_component(video_path, video_url)
-
-                # 使用更长的超时时间，但提供更好的反馈
+            if video_url or video_path:
                 try:
-                    if video_url:
-                        logger.info(f"⏳ 正在发送视频...链接：{video_url}")
-                    await asyncio.wait_for(
-                        event.send(event.chain_result([video_component])),
-                        timeout=90.0  # 增加到90秒超时
-                    )
-                    if video_path:
-                        logger.info("✅ 视频文件发送成功")
-                    logger.info(f"用户 {user_id} 的视频发送成功")
+                    video_component = await self._create_video_component(video_path, video_url)
+
+                    # 使用更长的超时时间，但提供更好的反馈
+                    try:
+                        if video_url:
+                            logger.info(f"⏳ 正在发送视频...链接：{video_url}")
+                        await asyncio.wait_for(
+                            event.send(event.chain_result([video_component])),
+                            timeout=90.0  # 增加到90秒超时
+                        )
+                        if video_path:
+                            logger.info("✅ 视频文件发送成功")
+                        logger.info(f"用户 {user_id} 的视频发送成功")
                         
-                except asyncio.TimeoutError:
-                    logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
-                    await event.send(event.plain_result(
-                        "⚠️ 视频发送超时，但可能仍在传输中。\n"
-                        "如果稍后收到视频，说明发送成功。"
-                    ))
-                    
-                    # 清理文件（如果配置允许）
-                    if video_path:
-                        await self._cleanup_video_file(video_path)
-                        
-                except Exception as e:
-                    # 区分WebSocket超时和真正的错误
-                    if "WebSocket API call timeout" in str(e):
-                        logger.warning(f"用户 {user_id} 的视频发送WebSocket超时: {e}")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
                         await event.send(event.plain_result(
                             "⚠️ 视频发送超时，但可能仍在传输中。\n"
                             "如果稍后收到视频，说明发送成功。"
                         ))
-                    else:
-                        logger.error(f"用户 {user_id} 的视频发送真正失败: {e}")
-                        await event.send(event.plain_result(f"❌ 视频发送失败: {str(e)}"))
-                        if video_url:
-                            await event.send(event.plain_result(f"🎬 文件发送失败，请点击链接下载：\n{video_url}"))
-            else:
-                await event.send(event.plain_result("❌ 视频生成失败，请稍后再试"))
+                    
+                        # 清理文件（如果配置允许）
+                        if video_path:
+                            await self._cleanup_video_file(video_path)
+                        
+                    except Exception as e:
+                        # 区分WebSocket超时和真正的错误
+                        if "WebSocket API call timeout" in str(e):
+                            logger.warning(f"用户 {user_id} 的视频发送WebSocket超时: {e}")
+                            await event.send(event.plain_result(
+                                "⚠️ 视频发送超时，但可能仍在传输中。\n"
+                                "如果稍后收到视频，说明发送成功。"
+                            ))
+                        else:
+                            logger.error(f"用户 {user_id} 的视频发送真正失败: {e}")
+                            await event.send(event.plain_result(f"❌ 视频发送失败: {str(e)}"))
+                            if video_url:
+                                await event.send(event.plain_result(f"🎬 文件发送失败，请点击链接下载：\n{video_url}"))
+                else:
+                    await event.send(event.plain_result("❌ 视频生成失败，请稍后再试"))
         
         except Exception as e:
             logger.error(f"用户 {user_id} 的异步视频生成异常: {e}")
@@ -669,9 +669,7 @@ class GrokVideoPlugin(Star):
             "• 图生视频：必须发送图片并带上指令，或引用图片发送指令\n\n"
             "示例：\n"
             "• /grok 让画面动起来 (需带图/引用图)\n\n"
-            "管理员命令：\n"
-            "• /grok测试 - 测试API连接\n"
-            "• /grok帮助 - 显示此帮助信息\n\n"
+            "• /grok帮助 - 显示帮助信息\n\n"
             "注意：视频生成需要较长时间，请耐心等待"
         )
         yield event.plain_result(help_text)
