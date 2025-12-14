@@ -6,19 +6,17 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Any
-import tempfile
 from urllib.parse import urljoin
 
 import httpx
 import aiofiles
 from astrbot.api import logger
-from astrbot.api.all import *
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.api.message_components import Image, Reply, Plain
+from astrbot.api.message_components import Image, Reply
 
 
-@register("grok-video", "沐沐沐倾", "Grok视频生成插件，支持根据图片和提示词生成视频", "1.0.2")
+@register("grok-video", "沐沐沐倾", "Grok视频生成插件，支持根据图片和提示词生成视频", "1.1.0")
 class GrokVideoPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -28,7 +26,6 @@ class GrokVideoPlugin(Star):
         self.server_url = config.get("server_url", "https://api.x.ai").rstrip('/')
         self.model_id = config.get("model_id", "grok-imagine-0.9")
         self.api_key = config.get("api_key", "")
-        self.enabled = config.get("enabled", True)
         
         # 请求配置
         self.timeout_seconds = config.get("timeout_seconds", 180)
@@ -46,8 +43,7 @@ class GrokVideoPlugin(Star):
         self._rate_limit_locks = {}  # group_id -> asyncio.Lock() 用于并发安全
         self._processing_tasks = {}  # user_id -> task_id 防止重复触发
         
-        # 管理员用户（优化为set提高查询效率）
-        self.admin_users = set(str(u) for u in config.get("admin_users", []))
+        
 
         self.save_video_enabled = config.get("save_video_enabled", False)
 
@@ -69,9 +65,7 @@ class GrokVideoPlugin(Star):
         
         logger.info(f"Grok视频生成插件已初始化，API地址: {self.api_url}")
 
-    def _is_admin(self, event: AstrMessageEvent) -> bool:
-        """检查是否为管理员"""
-        return str(event.get_sender_id()) in self.admin_users
+    
 
     async def _check_group_access(self, event: AstrMessageEvent) -> Optional[str]:
         """检查群组访问权限和速率限制（并发安全）"""
@@ -221,7 +215,7 @@ class GrokVideoPlugin(Star):
             try:
                 logger.info(f"调用Grok API (尝试 {attempt + 1}/{self.max_retry_attempts})")
                 logger.debug(f"请求URL: {self.api_url}")
-                logger.debug(f"请求模型: {self.model_id}")
+                logger.info(f"使用模型: {self.model_id}")
 
                 async with httpx.AsyncClient(timeout=timeout_config) as client:
                     # 采用流式SSE读取，兼容 grok2api 的 data: 行格式
@@ -259,10 +253,20 @@ class GrokVideoPlugin(Star):
                                         delta = c0["delta"].get("content")
                                         if isinstance(delta, str):
                                             accumulated.append(delta)
+                                        elif isinstance(delta, list):
+                                            url_from_list = self._try_list_content_extraction(delta)
+                                            if url_from_list:
+                                                logger.info(f"成功提取到视频URL: {url_from_list}")
+                                                return url_from_list, None
                                     elif "message" in c0 and isinstance(c0["message"], dict):
                                         content = c0["message"].get("content")
                                         if isinstance(content, str):
                                             accumulated.append(content)
+                                        elif isinstance(content, list):
+                                            url_from_list = self._try_list_content_extraction(content)
+                                            if url_from_list:
+                                                logger.info(f"成功提取到视频URL: {url_from_list}")
+                                                return url_from_list, None
                             except Exception:
                                 pass
 
@@ -297,52 +301,6 @@ class GrokVideoPlugin(Star):
         
         return None, "所有重试均失败"
 
-    def _extract_video_url_from_response(self, response_data: dict) -> Tuple[Optional[str], Optional[str]]:
-        """
-        从 API 响应中提取视频 URL，采用更健墮的解析策略
-        
-        返回: (video_url, error_message)
-        """
-        try:
-            # 1. 首先检查响应结构是否符合预期
-            if not isinstance(response_data, dict):
-                return None, f"无效的响应格式: {type(response_data)}"
-            
-            if "choices" not in response_data or not response_data["choices"]:
-                return None, "API响应中缺少 choices 字段"
-            
-            # 2. 提取内容
-            choice = response_data["choices"][0]
-            if not isinstance(choice, dict) or "message" not in choice:
-                return None, "choices[0] 缺少 message 字段"
-            
-            message = choice["message"]
-            if not isinstance(message, dict) or "content" not in message:
-                return None, "message 缺少 content 字段"
-            
-            content = message["content"]
-            if not isinstance(content, str):
-                return None, f"content 不是字符串类型: {type(content)}"
-            
-            logger.debug(f"API返回内容长度: {len(content)} 字符")
-            
-            # 3. 优先尝试结构化解析（如果 API 支持）
-            video_url = self._try_structured_extraction(response_data)
-            if video_url:
-                return video_url, None
-            
-            # 4. 如果结构化解析失败，使用改进的文本解析
-            video_url = self._try_content_extraction(content)
-            if video_url:
-                return video_url, None
-            
-            # 5. 所有方法都失败
-            logger.warning(f"无法从响应中提取视频URL，内容片段: {content[:200]}...")
-            return None, f"未能从 API 响应中提取到有效的视频 URL"
-            
-        except Exception as e:
-            logger.error(f"URL 提取过程中发生异常: {e}")
-            return None, f"URL 提取失败: {str(e)}"
     
     def _try_structured_extraction(self, response_data: dict) -> Optional[str]:
         """
@@ -355,11 +313,11 @@ class GrokVideoPlugin(Star):
                 if isinstance(url, str) and url.startswith(("http://", "https://")):
                     logger.info("使用结构化 video_url 字段")
                     return url
-            
+
             # 检查 choices[0].message 中是否有结构化数据
             choice = response_data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            
+
             # 检查是否有 attachments 或 media 字段
             for field in ["attachments", "media", "files"]:
                 if field in message and isinstance(message[field], list):
@@ -369,11 +327,33 @@ class GrokVideoPlugin(Star):
                             if isinstance(url, str) and url.endswith(".mp4"):
                                 logger.info(f"使用结构化 {field} 字段")
                                 return url
-            
+
             return None
-            
+
         except Exception as e:
             logger.debug(f"结构化提取失败: {e}")
+            return None
+    
+    def _try_list_content_extraction(self, content_list: Any) -> Optional[str]:
+        try:
+            if not isinstance(content_list, list):
+                return None
+            for part in content_list:
+                if isinstance(part, dict):
+                    if "video_url" in part and isinstance(part["video_url"], str):
+                        url = part["video_url"]
+                        if self._is_valid_video_url(url):
+                            return url
+                    if "url" in part and isinstance(part["url"], str):
+                        url = part["url"]
+                        if self._is_valid_video_url(url):
+                            return url
+                    if "image_url" in part and isinstance(part["image_url"], dict):
+                        url = part["image_url"].get("url")
+                        if isinstance(url, str) and self._is_valid_video_url(url):
+                            return url
+            return None
+        except Exception:
             return None
     
     def _try_content_extraction(self, content: str) -> Optional[str]:
@@ -497,7 +477,7 @@ class GrokVideoPlugin(Star):
                 
                 # 确保返回绝对路径，避免路径问题
                 absolute_path = file_path.resolve()
-                logger.info(f"视频已保存到: {absolute_path}")
+                logger.info("视频已保存到本地")
                 return str(absolute_path)
         
         except Exception as e:
@@ -514,7 +494,7 @@ class GrokVideoPlugin(Star):
             path = Path(video_path)
             if path.exists():
                 path.unlink()
-                logger.debug(f"已清理本地视频缓存: {path}")
+                logger.debug("已清理本地视频缓存")
         except Exception as e:
             logger.warning(f"清理视频文件失败: {e}")
 
@@ -522,23 +502,20 @@ class GrokVideoPlugin(Star):
         """根据配置构建最终 Video 组件，优先使用URL发送（适合Docker部署）"""
         from astrbot.api.message_components import Video
 
-        # Docker部署下优先使用远程URL（避免文件系统共享问题）
+        if video_path and self.save_video_enabled:
+            logger.info("使用本地视频文件发送")
+            return Video.fromFileSystem(path=video_path)
+        
         if video_url:
             logger.info(f"使用远程视频URL发送: {video_url}")
             return Video.fromURL(video_url)
-        
-        # 如果没有远程URL，且用户配置了保存，尝试本地文件
-        if video_path and self.save_video_enabled:
-            logger.warning(f"Docker部署下使用本地文件可能失败: {video_path}")
-            return Video.fromFileSystem(path=video_path)
 
         raise ValueError("缺少可用的视频URL，无法发送")
 
     async def _generate_video_core(self, event: AstrMessageEvent, prompt: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """核心视频生成逻辑"""
         # 检查功能是否启用
-        if not self.enabled:
-            return None, None, "视频生成功能已禁用"
+        
         
         # 提取图片
         images = await self._extract_images_from_message(event)
@@ -564,12 +541,13 @@ class GrokVideoPlugin(Star):
         # Docker部署下优先使用URL，不下载本地文件避免文件系统问题
         local_path = None
         if self.save_video_enabled:
-            logger.info("用户配置了保存，但Docker部署下建议使用URL发送")
-            # 可选下载，但不强制
+            logger.info(f"⏳ 正在下载视频...链接：{video_url}")
             try:
                 local_path = await self._download_video(video_url)
                 if local_path:
-                    logger.info(f"视频已下载到: {local_path}")
+                    logger.info("✅ 视频下载成功，已保存到本地")
+                else:
+                    logger.warning("视频下载失败，将使用URL发送")
             except Exception as e:
                 logger.warning(f"视频下载失败，将使用URL发送: {e}")
 
@@ -587,24 +565,28 @@ class GrokVideoPlugin(Star):
                 await event.send(event.plain_result(f"❌ {error_msg}"))
                 return
             
-            if video_url or video_path:
+        if video_url or video_path:
+            try:
+                video_component = await self._create_video_component(video_path, video_url)
+
+                # 使用更长的超时时间，但提供更好的反馈
                 try:
-                    video_component = await self._create_video_component(video_path, video_url)
-                    
-                    # 使用更长的超时时间，但提供更好的反馈
-                    try:
-                        await asyncio.wait_for(
-                            event.send(event.chain_result([video_component])),
-                            timeout=90.0  # 增加到90秒超时
-                        )
-                        logger.info(f"用户 {user_id} 的视频发送成功")
+                    if video_url:
+                        logger.info(f"⏳ 正在发送视频...链接：{video_url}")
+                    await asyncio.wait_for(
+                        event.send(event.chain_result([video_component])),
+                        timeout=90.0  # 增加到90秒超时
+                    )
+                    if video_path:
+                        logger.info("✅ 视频文件发送成功")
+                    logger.info(f"用户 {user_id} 的视频发送成功")
                         
-                    except asyncio.TimeoutError:
-                        logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
-                        await event.send(event.plain_result(
-                            "⚠️ 视频发送超时，但可能仍在传输中。\n"
-                            "如果稍后收到视频，说明发送成功。"
-                        ))
+                except asyncio.TimeoutError:
+                    logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
+                    await event.send(event.plain_result(
+                        "⚠️ 视频发送超时，但可能仍在传输中。\n"
+                        "如果稍后收到视频，说明发送成功。"
+                    ))
                     
                     # 清理文件（如果配置允许）
                     if video_path:
@@ -621,6 +603,8 @@ class GrokVideoPlugin(Star):
                     else:
                         logger.error(f"用户 {user_id} 的视频发送真正失败: {e}")
                         await event.send(event.plain_result(f"❌ 视频发送失败: {str(e)}"))
+                        if video_url:
+                            await event.send(event.plain_result(f"🎬 文件发送失败，请点击链接下载：\n{video_url}"))
             else:
                 await event.send(event.plain_result("❌ 视频生成失败，请稍后再试"))
         
@@ -673,36 +657,7 @@ class GrokVideoPlugin(Star):
             logger.error(f"视频生成命令异常: {e}")
             yield event.plain_result(f"❌ 生成视频时遇到问题: {str(e)}")
 
-    @filter.command("grok测试")
-    async def cmd_test(self, event: AstrMessageEvent):
-        """测试Grok API连接（管理员专用）"""
-        if not self._is_admin(event):
-            yield event.plain_result("此命令仅限管理员使用")
-            return
-        
-        try:
-            # 使用更整洁的纯文本排版
-            status_icon = "✅" if self.enabled else "❌"
-            key_status = "✅ 已配置" if self.api_key else "❌ 未配置"
-            
-            lines = [
-                "🔍 Grok视频生成插件测试结果",
-                "------------------------------",
-                f"{status_icon} 功能状态: {'已启用' if self.enabled else '已禁用'}",
-                f"🔑 API密钥: {key_status}",
-                f"📡 API地址: {self.api_url}",
-                f"🤖 模型ID: {self.model_id}",
-                f"⏱️ 超时设置: {self.timeout_seconds}秒",
-                f"🔄 最大重试: {self.max_retry_attempts}次",
-                f"📁 存储目录: {self.videos_dir}",
-                "------------------------------"
-            ]
-            
-            yield event.plain_result("\n".join(lines))
-        
-        except Exception as e:
-            logger.error(f"测试命令异常: {e}")
-            yield event.plain_result(f"❌ 测试失败: {str(e)}")
+    
 
     @filter.command("grok帮助")
     async def cmd_help(self, event: AstrMessageEvent):

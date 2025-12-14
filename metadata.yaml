@@ -1,7 +1,7 @@
 name: astrbot_plugin_grok_video
 display_name: Grok视频生成
-desc: "使用Grok Imagine生成视频，支持图生视频。"
-version: 1.0.2
+desc: "基于Grok模型，根据图片与提示词生成视频"
+version: 1.1.0
 author: 沐沐沐倾
 repo: https://github.com/muqing-kg/astrbot_plugin_grok_video
 social_link: https://jk.muqing.us.kg/status/muqing

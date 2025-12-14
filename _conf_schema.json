@@ -2,8 +2,8 @@
   "server_url": {
     "description": "Grok2API 服务地址",
     "type": "string",
-    "hint": "示例：https://your-domain 或 https://ai.muqing.us.kg",
-    "default": "https://ai.muqing.us.kg"
+    "hint": "示例：https://your-domain",
+    "default": "https://your-domain"
   },
   "model_id": {
     "description": "模型ID",
@@ -17,11 +17,6 @@
     "hint": "输入您的Grok API密钥",
     "default": ""
   },
-  "enabled": {
-    "description": "启用视频生成功能",
-    "type": "bool",
-    "default": true
-  },
   "timeout_seconds": {
     "description": "请求超时时间（秒）",
     "type": "int",
@@ -33,11 +28,6 @@
     "type": "int",
     "hint": "API请求失败时的最大重试次数",
     "default": 3
-  },
-  "admin_users": {
-    "description": "管理员用户ID列表（可以使用测试命令）",
-    "type": "list",
-    "default": []
   },
   "group_control_mode": {
     "description": "群组控制模式",
