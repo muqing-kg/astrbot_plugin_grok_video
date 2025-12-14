@@ -565,48 +565,41 @@ class GrokVideoPlugin(Star):
                 await event.send(event.plain_result(f"❌ {error_msg}"))
                 return
             
-            if video_url or video_path:
-                try:
-                    video_component = await self._create_video_component(video_path, video_url)
-
-                    # 使用更长的超时时间，但提供更好的反馈
-                    try:
-                        if video_url:
-                            logger.info(f"⏳ 正在发送视频...链接：{video_url}")
-                        await asyncio.wait_for(
-                            event.send(event.chain_result([video_component])),
-                            timeout=90.0  # 增加到90秒超时
-                        )
-                        if video_path:
-                            logger.info("✅ 视频文件发送成功")
-                        logger.info(f"用户 {user_id} 的视频发送成功")
-                        
-                    except asyncio.TimeoutError:
-                        logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
-                        await event.send(event.plain_result(
-                            "⚠️ 视频发送超时，但可能仍在传输中。\n"
-                            "如果稍后收到视频，说明发送成功。"
-                        ))
-                    
-                        # 清理文件（如果配置允许）
-                        if video_path:
-                            await self._cleanup_video_file(video_path)
-                        
-                    except Exception as e:
-                        # 区分WebSocket超时和真正的错误
-                        if "WebSocket API call timeout" in str(e):
-                            logger.warning(f"用户 {user_id} 的视频发送WebSocket超时: {e}")
-                            await event.send(event.plain_result(
-                                "⚠️ 视频发送超时，但可能仍在传输中。\n"
-                                "如果稍后收到视频，说明发送成功。"
-                            ))
-                        else:
-                            logger.error(f"用户 {user_id} 的视频发送真正失败: {e}")
-                            await event.send(event.plain_result(f"❌ 视频发送失败: {str(e)}"))
-                            if video_url:
-                                await event.send(event.plain_result(f"🎬 文件发送失败，请点击链接下载：\n{video_url}"))
+            if not (video_url or video_path):
+                await event.send(event.plain_result("❌ 视频生成失败，请稍后再试"))
+                return
+            
+            try:
+                video_component = await self._create_video_component(video_path, video_url)
+                if video_url:
+                    logger.info(f"⏳ 正在发送视频...链接：{video_url}")
+                await asyncio.wait_for(
+                    event.send(event.chain_result([video_component])),
+                    timeout=90.0
+                )
+                if video_path:
+                    logger.info("✅ 视频文件发送成功")
+                logger.info(f"用户 {user_id} 的视频发送成功")
+            except asyncio.TimeoutError:
+                logger.warning(f"用户 {user_id} 的视频发送超时，但可能仍在传输")
+                await event.send(event.plain_result(
+                    "⚠️ 视频发送超时，但可能仍在传输中。\n"
+                    "如果稍后收到视频，说明发送成功。"
+                ))
+            except Exception as e:
+                if "WebSocket API call timeout" in str(e):
+                    logger.warning(f"用户 {user_id} 的视频发送WebSocket超时: {e}")
+                    await event.send(event.plain_result(
+                        "⚠️ 视频发送超时，但可能仍在传输中。\n"
+                        "如果稍后收到视频，说明发送成功。"
+                    ))
                 else:
-                    await event.send(event.plain_result("❌ 视频生成失败，请稍后再试"))
+                    logger.error(f"用户 {user_id} 的视频发送真正失败: {e}")
+                    await event.send(event.plain_result(f"❌ 视频发送失败: {str(e)}"))
+                    if video_url:
+                        await event.send(event.plain_result(f"🎬 文件发送失败，请点击链接下载：\n{video_url}"))
+            if video_path:
+                await self._cleanup_video_file(video_path)
         
         except Exception as e:
             logger.error(f"用户 {user_id} 的异步视频生成异常: {e}")
